@@ -1,167 +1,149 @@
 package org.example;
+
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
+import java.util.zip.CRC32;
+import java.util.zip.Checksum;
 import javax.imageio.ImageIO;
 
 public class Main {
-    private static final int MESSAGE_SIZE_BITS = 255;
-    private static final String POLYNOMIAL_HEX = "5D6DCB";
 
-    // Метод для конвертации строки в бинарное представление (ASCII-коды)
-    private static String convertToBinary(String input) {
-        StringBuilder binaryMessage = new StringBuilder();
-        for (int i = 0; i < input.length(); i++) {
-            char c = input.charAt(i);
-            int asciiValue = (int) c;
-            String binaryValue = Integer.toBinaryString(asciiValue);
-            // Дополнить нулями слева, чтобы получить 8-битное представление
-            while (binaryValue.length() < 8) {
-                binaryValue = "0" + binaryValue;
-            }
-            binaryMessage.append(binaryValue);
-        }
-        return binaryMessage.toString();
-    }
-
-    public static void main(String[] args) {
+    // Внедрение сообщения в изображение
+    public static void embedMessage(String inputImageFile, String outputImageFile, byte[] message) {
         try {
-            // Чтение стеганоконтейнера
-            BufferedImage image = ImageIO.read(new File("image.bmp"));
+            // Загрузка изображения
+            BufferedImage image = ImageIO.read(new File(inputImageFile));
 
-            // Пример входного сообщения (строка с цифрами и буквами)
-            String message = "Hello123";
-            String binaryMessage = convertToBinary(message);
+            int width = image.getWidth();
+            int height = image.getHeight();
 
-            // Вставка сообщения
-            embedMessage(image, binaryMessage);
+            int messageLength = message.length;
 
-            // Извлечение сообщения
-            String extractedBinaryMessage = extractMessage(image);
-
-            // Проверка CRC 24
-            if (extractedBinaryMessage != null) {
-                System.out.println("Сообщение успешно извлечено и прошло проверку CRC 24.");
-                String extractedMessage = convertBinaryToString(extractedBinaryMessage);
-                System.out.println("Извлеченное сообщение: " + extractedMessage);
-            } else {
-                System.err.println("Ошибка: сообщение не прошло проверку CRC 24 или не найдено.");
+            // Проверка, что сообщение может быть встроено в изображение
+            if (messageLength * 8 > width * height) {
+                System.err.println("Сообщение слишком большое для данного изображения.");
+                return;
             }
+
+            int messageIndex = 0;
+
+            // Перебор пикселей изображения и встраивание битов сообщения
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int pixel = image.getRGB(x, y);
+                    int alpha = (pixel >> 24) & 0xFF;
+                    int red = (pixel >> 16) & 0xFF;
+                    int green = (pixel >> 8) & 0xFF;
+                    int blue = pixel & 0xFF;
+
+                    if (messageIndex < messageLength) {
+                        // Получение следующего байта сообщения
+                        byte nextByte = message[messageIndex];
+                        for (int bitIndex = 0; bitIndex < 8; bitIndex++) {
+                            // Встраивание битов сообщения в младшие биты компонентов RGB
+                            int bit = (nextByte >> bitIndex) & 1;
+                            red = (red & 0xFE) | bit;
+                            messageIndex++;
+                            if (messageIndex >= messageLength) {
+                                break;
+                            }
+                        }
+                    }
+
+                    // Обновление пикселя с встроенным битом
+                    int newPixel = (alpha << 24) | (red << 16) | (green << 8) | blue;
+                    image.setRGB(x, y, newPixel);
+                }
+            }
+
+            // Сохранение изображения с встроенным сообщением
+            ImageIO.write(image, "BMP", new File(outputImageFile));
+            System.out.println("Сообщение успешно встроено в изображение.");
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
-
-    // Метод для конвертации бинарного представления в строку
-    private static String convertBinaryToString(String binary) {
-        StringBuilder text = new StringBuilder();
-        for (int i = 0; i < binary.length(); i += 8) {
-            String byteStr = binary.substring(i, i + 8);
-            int byteValue = Integer.parseInt(byteStr, 2);
-            char c = (char) byteValue;
-            text.append(c);
-        }
-        return text.toString();
-    }
-
-
-    // Вставка сообщения в изображение
-    private static void embedMessage(BufferedImage image, String message) {
-        int width = image.getWidth();
-        int height = image.getHeight();
-        int pixelIndex = 0;
-
-        for (int i = 0; i < message.length(); i++) {
-            char bitToEmbed = message.charAt(i);
-            int pixel = image.getRGB(pixelIndex % width, pixelIndex / width);
-            int alpha = (pixel >> 24) & 0xFF;
-            int red = (pixel >> 16) & 0xFF;
-            int newRed = (red & 0xFE) | Character.getNumericValue(bitToEmbed);
-            int newPixel = (alpha << 24) | (newRed << 16) | (red << 8) | (pixel & 0xFF);
-            image.setRGB(pixelIndex % width, pixelIndex / width, newPixel);
-            pixelIndex++;
-        }
-
-        // Добавляем CRC 24 контрольную сумму к сообщению и внедряем ее
-        String messageWithCRC = message + calculateCRC(message, POLYNOMIAL_HEX);
-        for (int i = 0; i < messageWithCRC.length(); i++) {
-            char bitToEmbed = messageWithCRC.charAt(i);
-            int pixel = image.getRGB(pixelIndex % width, pixelIndex / width);
-            int alpha = (pixel >> 24) & 0xFF;
-            int red = (pixel >> 16) & 0xFF;
-            int newRed = (red & 0xFE) | Character.getNumericValue(bitToEmbed);
-            int newPixel = (alpha << 24) | (newRed << 16) | (red << 8) | (pixel & 0xFF);
-            image.setRGB(pixelIndex % width, pixelIndex / width, newPixel);
-            pixelIndex++;
-        }
-    }
-
-
     // Извлечение сообщения из изображения
-    private static String extractMessage(BufferedImage image) {
-        int width = image.getWidth();
-        int height = image.getHeight();
-        int pixelIndex = 0;
-        StringBuilder extractedMessage = new StringBuilder();
+    public static byte[] extractMessage(String inputImageFile, int messageLength) {
+        try {
+            // Загрузка изображения
+            BufferedImage image = ImageIO.read(new File(inputImageFile));
 
-        while (extractedMessage.length() < MESSAGE_SIZE_BITS) {
-            int pixel = image.getRGB(pixelIndex % width, pixelIndex / width);
-            int red = (pixel >> 16) & 0xFF;
-            int lsb = red & 0x01;
-            extractedMessage.append(lsb);
+            int width = image.getWidth();
+            int height = image.getHeight();
 
-            // Проверяем, если извлеченное сообщение завершилось сигнатурой CRC 24
-            if (extractedMessage.length() >= 24 && extractedMessage.substring(extractedMessage.length() - 24).equals(POLYNOMIAL_HEX)) {
-                break;
-            }
+            byte[] extractedMessage = new byte[messageLength];
+            int messageIndex = 0;
 
-            pixelIndex++;
-        }
+            // Перебор пикселей и извлечение младших битов
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int pixel = image.getRGB(x, y);
+                    int red = (pixel >> 16) & 0xFF;
 
-        if (extractedMessage.length() >= 24) {
-            String extractedCRC = extractedMessage.substring(extractedMessage.length() - 24);
-            extractedMessage.delete(extractedMessage.length() - 24, extractedMessage.length());
+                    for (int bitIndex = 0; bitIndex < 8; bitIndex++) {
+                        if (messageIndex >= messageLength) {
+                            return extractedMessage;
+                        }
 
-            // Проверяем CRC 24 контрольную сумму
-            if (checkCRC(extractedMessage.toString(), extractedCRC)) {
-                return extractedMessage.toString();
-            } else {
-                System.err.println("Ошибка: сообщение не прошло проверку CRC 24.");
-            }
-        } else {
-            System.err.println("Ошибка: CRC 24 сигнатура не найдена.");
-        }
-
-        return null;
-    }
-
-    // Вычисление CRC 24 контрольной суммы
-    private static String calculateCRC(String message, String polynomialHex) {
-        int crc = 0x000000;
-
-        for (int i = 0; i < message.length(); i++) {
-            int data = (int) message.charAt(i) & 0xFF;
-            crc ^= data << 16;
-            for (int j = 0; j < 8; j++) {
-                if ((crc & 0x800000) != 0) {
-                    crc = (crc << 1) ^ Integer.parseInt(polynomialHex, 16);
-                } else {
-                    crc = (crc << 1);
+                        int bit = (red >> bitIndex) & 1;
+                        extractedMessage[messageIndex] = (byte) ((extractedMessage[messageIndex] << 1) | bit);
+                        messageIndex++;
+                    }
                 }
             }
-        }
 
-        String crcHexString = Integer.toHexString(crc);
-        // Дополнить нулями до 6 символов
-        while (crcHexString.length() < 6) {
-            crcHexString = "0" + crcHexString;
+            return extractedMessage;
+        } catch (IOException e) {
+            e.printStackTrace();
+            return null;
         }
-        return crcHexString;
     }
 
-    // Проверка CRC 24
-    private static boolean checkCRC(String message, String receivedCRC) {
-        String calculatedCRC = calculateCRC(message, POLYNOMIAL_HEX);
-        return calculatedCRC.equals(receivedCRC);
+
+    // Вычисление CRC24 контрольной суммы для сообщения
+    public static long calculateCRC24(byte[] message) {
+        Checksum checksum = new CRC32();
+        checksum.update(message, 0, message.length);
+        long crcValue = checksum.getValue();
+        // Применение ограничения на 24 бита
+        return crcValue & 0xFFFFFF;
+    }
+
+    public static void main(String[] args) {
+        String inputImageFile = "image.bmp";
+        String outputImageFile = "output_image.bmp";
+
+        // Входное сообщение
+// Входное сообщение
+        byte[] message = "1234567890".getBytes();
+
+// Встраивание контрольной суммы CRC 24 в сообщение
+        long crcValue = calculateCRC24(message);
+        byte[] crcBytes = new byte[3];
+        crcBytes[0] = (byte) ((crcValue >> 16) & 0xFF);
+        crcBytes[1] = (byte) ((crcValue >> 8) & 0xFF);
+        crcBytes[2] = (byte) (crcValue & 0xFF);
+
+// Добавление CRC к сообщению
+        byte[] messageWithCRC = new byte[message.length + 3];
+        System.arraycopy(message, 0, messageWithCRC, 0, message.length);
+        System.arraycopy(crcBytes, 0, messageWithCRC, message.length, 3);
+
+// Встраивание сообщения в изображение
+        embedMessage(inputImageFile, outputImageFile, messageWithCRC);
+
+
+        // Извлечение сообщения из изображения
+        byte[] extractedMessage = extractMessage(outputImageFile, messageWithCRC.length);
+
+        // Проверка CRC
+        long extractedCRC = calculateCRC24(extractedMessage);
+        if (extractedCRC == crcValue) {
+            System.out.println("CRC проверка прошла успешно.");
+        } else {
+            System.out.println("Ошибка CRC проверки.");
+        }
     }
 }
